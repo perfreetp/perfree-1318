@@ -156,6 +156,11 @@ export const HistoryPanel: React.FC = () => {
                         {record.request.method}
                       </span>
                       <span className="truncate">{record.request.name}</span>
+                      {record.failureReason && (
+                        <span className="tag tag-warning">
+                          ⚑ {record.failureReason}
+                        </span>
+                      )}
                       {record.response && (
                         <span className="tag">
                           {record.response.status}
@@ -206,11 +211,47 @@ export const HistoryPanel: React.FC = () => {
                       <span className="tag">{formatSize(selectedRecord.response.size)}</span>
                     </>
                   )}
+                  {selectedRecord.failureReason && (
+                    <span className="tag tag-warning">⚑ {selectedRecord.failureReason}</span>
+                  )}
                   <span className="text-secondary text-sm">{formatDate(selectedRecord.createdAt)}</span>
                 </div>
 
+                {selectedRecord.actualRequest && (
+                  <div className="mb-3">
+                    <strong className="text-sm">实际发送请求</strong>
+                    <div className="mt-2">
+                      <div className="text-sm mb-1">
+                        <span className="text-secondary">URL: </span>
+                        {selectedRecord.actualRequest.url}
+                      </div>
+                      <div className="text-sm mb-1">
+                        <span className="text-secondary">Method: </span>
+                        {selectedRecord.actualRequest.method}
+                      </div>
+                      {selectedRecord.actualRequest.bodyRaw && (
+                        <div>
+                          <span className="text-secondary text-sm">Body: </span>
+                          <pre className="json-viewer mt-1" style={{ maxHeight: 150, fontSize: 12 }}>
+                            {selectedRecord.actualRequest.bodyRaw}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {selectedRecord.failureReason && (
+                  <div className="mb-3">
+                    <strong className="text-sm">失败原因</strong>
+                    <div className="mt-2 text-sm" style={{ padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 4 }}>
+                      {selectedRecord.failureReason}
+                    </div>
+                  </div>
+                )}
+
                 <div className="mb-3">
-                  <strong className="text-sm">请求 URL</strong>
+                  <strong className="text-sm">原始请求 URL</strong>
                   <div className="json-viewer mt-2 text-sm">{selectedRecord.request.url}</div>
                 </div>
 

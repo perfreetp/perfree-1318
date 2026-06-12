@@ -56,6 +56,8 @@ interface AppState extends AppData {
   setCompareSnapshot: (id: string | null) => void;
 
   addHistory: (record: Omit<HistoryRecord, 'id' | 'createdAt'>) => void;
+  addHistoryBatch: (records: Omit<HistoryRecord, 'id' | 'createdAt'>[]) => void;
+  updateResultFailureReason: (resultId: string, reason: string) => void;
   clearHistory: (projectId?: string) => void;
   clearExpiredHistory: (days: number) => void;
 
@@ -355,6 +357,25 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
     set({ history: [history, ...get().history].slice(0, 1000) });
     get().persist();
+  },
+
+  addHistoryBatch: (records) => {
+    const now = Date.now();
+    const newRecords = records.map((record) => ({
+      ...record,
+      id: generateId(),
+      createdAt: now
+    }));
+    set({ history: [...newRecords, ...get().history].slice(0, 1000) });
+    get().persist();
+  },
+
+  updateResultFailureReason: (resultId, reason) => {
+    const state = get();
+    const newResults = state.currentResults.map((r) =>
+      r.id === resultId ? { ...r, failureReason: reason } : r
+    );
+    set({ currentResults: newResults });
   },
 
   clearHistory: (projectId) => {

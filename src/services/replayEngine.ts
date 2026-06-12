@@ -5,7 +5,7 @@ import {
   ReplayConfig,
   ReplayQueueItem
 } from '@/types';
-import { sendRequest, extractFromResponse, collectVariables } from './httpService';
+import { sendRequest, extractFromResponse, collectVariables, SendRequestResult } from './httpService';
 import { runAssertions } from './assertionService';
 import { sleep, generateId } from '@/utils';
 
@@ -45,6 +45,39 @@ export class ReplayEngine {
     const total = enabledRequests.length;
     let completed = 0;
 
+    const buildResult = (
+      request: ApiRequest,
+      sendResult: SendRequestResult,
+      startTime: number
+    ): RequestResult => {
+      const resp = sendResult.response;
+      const assertionResults = resp
+        ? runAssertions(resp, request.assertions || [])
+        : [];
+      const passed = assertionResults.length === 0
+        ? !sendResult.error && !!resp
+        : assertionResults.every((a) => a.passed);
+
+      let extracted: Record<string, string> = {};
+      if (config.extractPrevious && resp) {
+        extracted = extractFromResponse(resp, request.extractors || []);
+      }
+
+      return {
+        id: generateId(),
+        requestId: request.id,
+        request,
+        actualRequest: sendResult.actualRequest,
+        response: resp,
+        error: sendResult.error,
+        assertionResults,
+        extractedVariables: extracted,
+        passed,
+        startTime,
+        endTime: Date.now()
+      };
+    };
+
     const processRequest = async (
       request: ApiRequest,
       index: number
@@ -66,45 +99,15 @@ export class ReplayEngine {
       const startTime = Date.now();
       const envVars = collectVariables(environment?.variables || [], extractedVars);
 
-      try {
-        const response = await sendRequest(request, envVars);
+      const sendResult = await sendRequest(request, envVars);
 
-        if (config.extractPrevious) {
-          const extracted = extractFromResponse(response, request.extractors || []);
-          Object.assign(extractedVars, extracted);
-        }
-
-        const assertionResults = runAssertions(response, request.assertions || []);
-        const passed = assertionResults.length === 0 ? true : assertionResults.every((a) => a.passed);
-
-        const result: RequestResult = {
-          id: generateId(),
-          requestId: request.id,
-          request,
-          response,
-          assertionResults,
-          extractedVariables: config.extractPrevious
-            ? extractFromResponse(response, request.extractors || [])
-            : {},
-          passed,
-          startTime,
-          endTime: Date.now()
-        };
-
-        return result;
-      } catch (error: any) {
-        return {
-          id: generateId(),
-          requestId: request.id,
-          request,
-          error: error.message || error.error || '请求失败',
-          assertionResults: [],
-          extractedVariables: {},
-          passed: false,
-          startTime,
-          endTime: Date.now()
-        };
+      if (config.extractPrevious && sendResult.response) {
+        const extracted = extractFromResponse(sendResult.response, request.extractors || []);
+        Object.assign(extractedVars, extracted);
       }
+
+      const result = buildResult(request, sendResult, startTime);
+      return result;
     };
 
     if (config.concurrency <= 1) {

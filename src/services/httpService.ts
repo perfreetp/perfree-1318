@@ -57,46 +57,84 @@ const buildHeaders = (items: KeyValuePair[]): Record<string, string> => {
   return headers;
 };
 
-const buildBody = (
-  request: ApiRequest
-): { data: any; headers: Record<string, string> } => {
+interface BuildBodyResult {
+  data: any;
+  headers: Record<string, string>;
+  bodyRaw: string;
+  parseError?: string;
+}
+
+const buildBody = (request: ApiRequest, variables: Record<string, string>): BuildBodyResult => {
   const body = request.body;
   const extraHeaders: Record<string, string> = {};
 
   switch (body.type) {
-    case 'json':
+    case 'json': {
       extraHeaders['Content-Type'] = 'application/json';
-      return { data: body.json ? JSON.parse(body.json) : {}, headers: extraHeaders };
-    case 'form-data':
+      const rawJson = body.json || '';
+      const substitutedJson = substituteVariables(rawJson, variables);
+      try {
+        const parsed = substitutedJson.trim() ? JSON.parse(substitutedJson) : {};
+        return { data: parsed, headers: extraHeaders, bodyRaw: substitutedJson };
+      } catch (e: any) {
+        return {
+          data: null,
+          headers: extraHeaders,
+          bodyRaw: substitutedJson,
+          parseError: `JSON 格式错误: ${e.message}`
+        };
+      }
+    }
+    case 'form-data': {
+      const substitutedData = substituteVariablesInKvp(body.formData || [], variables);
+      const formObj = Object.fromEntries(
+        substitutedData.filter((f) => f.enabled).map((f) => [f.key, f.value])
+      );
       return {
-        data: Object.fromEntries(
-          (body.formData || []).filter((f) => f.enabled).map((f) => [f.key, f.value])
-        ),
-        headers: extraHeaders
+        data: formObj,
+        headers: extraHeaders,
+        bodyRaw: JSON.stringify(formObj, null, 2)
       };
-    case 'x-www-form-urlencoded':
+    }
+    case 'x-www-form-urlencoded': {
       extraHeaders['Content-Type'] = 'application/x-www-form-urlencoded';
-      return {
-        data: new URLSearchParams(
-          (body.urlEncoded || [])
-            .filter((f) => f.enabled)
-            .map((f) => [f.key, f.value]) as any
-        ).toString(),
-        headers: extraHeaders
-      };
-    case 'raw':
-      return { data: body.raw || '', headers: extraHeaders };
-    case 'binary':
-      return { data: null, headers: extraHeaders };
+      const substitutedData = substituteVariablesInKvp(body.urlEncoded || [], variables);
+      const params = new URLSearchParams(
+        substitutedData
+          .filter((f) => f.enabled)
+          .map((f) => [f.key, f.value]) as any
+      );
+      return { data: params.toString(), headers: extraHeaders, bodyRaw: params.toString() };
+    }
+    case 'raw': {
+      const substitutedRaw = substituteVariables(body.raw || '', variables);
+      return { data: substitutedRaw, headers: extraHeaders, bodyRaw: substitutedRaw };
+    }
+    case 'binary': {
+      return { data: null, headers: extraHeaders, bodyRaw: '' };
+    }
     default:
-      return { data: null, headers: extraHeaders };
+      return { data: null, headers: extraHeaders, bodyRaw: '' };
   }
 };
+
+export interface SendRequestResult {
+  response?: ApiResponse;
+  error?: string;
+  bodyParseError?: string;
+  actualRequest: {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    body?: any;
+    bodyRaw?: string;
+  };
+}
 
 export const sendRequest = async (
   request: ApiRequest,
   variables: Record<string, string>
-): Promise<ApiResponse> => {
+): Promise<SendRequestResult> => {
   const startTime = Date.now();
 
   const substitutedUrl = substituteVariables(request.url, variables);
@@ -105,9 +143,39 @@ export const sendRequest = async (
 
   const url = buildUrl(substitutedUrl, substitutedParams);
   const headers = buildHeaders(substitutedHeaders);
-  const { data: bodyData, headers: bodyHeaders } = buildBody(request);
+  const {
+    data: bodyData,
+    headers: bodyHeaders,
+    bodyRaw,
+    parseError
+  } = buildBody(request, variables);
 
   Object.assign(headers, bodyHeaders);
+
+  const actualRequest = {
+    url,
+    method: request.method,
+    headers: { ...headers },
+    body: bodyData,
+    bodyRaw
+  };
+
+  if (parseError) {
+    const endTime = Date.now();
+    return {
+      error: parseError,
+      bodyParseError: parseError,
+      actualRequest,
+      response: {
+        status: 0,
+        statusText: 'Request Build Error',
+        headers: {},
+        data: { error: parseError },
+        time: endTime - startTime,
+        size: 0
+      }
+    };
+  }
 
   const config: AxiosRequestConfig = {
     method: request.method.toLowerCase(),
@@ -122,27 +190,31 @@ export const sendRequest = async (
   try {
     const response: AxiosResponse = await axios(config);
     const endTime = Date.now();
-    const responseData =
-      typeof response.data === 'string' ? response.data : JSON.stringify(response.data, null, 2);
 
     return {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers as Record<string, string>,
-      data: response.data,
-      time: endTime - startTime,
-      size: new Blob([JSON.stringify(response.data)]).size
+      response: {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers as Record<string, string>,
+        data: response.data,
+        time: endTime - startTime,
+        size: new Blob([JSON.stringify(response.data)]).size
+      },
+      actualRequest
     };
   } catch (error: any) {
     const endTime = Date.now();
-    throw {
-      status: 0,
-      statusText: error.message || 'Request failed',
-      headers: {},
-      data: null,
-      time: endTime - startTime,
-      size: 0,
-      error: error.message
+    return {
+      error: error.message || 'Request failed',
+      actualRequest,
+      response: {
+        status: 0,
+        statusText: error.message || 'Request failed',
+        headers: {},
+        data: null,
+        time: endTime - startTime,
+        size: 0
+      }
     };
   }
 };

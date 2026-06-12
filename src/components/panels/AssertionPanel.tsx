@@ -12,14 +12,14 @@ export const AssertionPanel: React.FC = () => {
     snapshots,
     compareSnapshotId,
     compareResults: compareResultsState,
-    setCompareSnapshot
+    setCompareSnapshot,
+    updateResultFailureReason
   } = useAppStore();
 
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null);
   const [selectedCompareResultId, setSelectedCompareResultId] = useState<string | null>(null);
   const [showFailReasonModal, setShowFailReasonModal] = useState(false);
   const [failReason, setFailReason] = useState('');
-  const [failureReasons, setFailureReasons] = useState<Record<string, string>>({});
   const [diffTab, setDiffTab] = useState<'status' | 'headers' | 'body' | 'assertions'>('body');
 
   const projectSnapshots = snapshots.filter((s) => s.projectId === selectedProjectId);
@@ -143,11 +143,11 @@ export const AssertionPanel: React.FC = () => {
                       onClick={(e) => {
                         e.stopPropagation();
                         setSelectedResultId(r.id);
-                        setFailReason(failureReasons[r.id] || '');
+                        setFailReason(r.failureReason || '');
                         setShowFailReasonModal(true);
                       }}
                     >
-                      {failureReasons[r.id] ? '编辑原因' : '标记失败原因'}
+                      {r.failureReason ? '编辑原因' : '标记失败原因'}
                     </button>
                   </div>
                 ))}
@@ -315,11 +315,11 @@ export const AssertionPanel: React.FC = () => {
               </div>
             )}
 
-            {selectedResult && failureReasons[selectedResult.id] && (
+            {selectedResult && selectedResult.failureReason && (
               <div className="mt-3">
                 <span className="tag tag-warning">失败原因</span>
                 <div className="mt-2 text-sm" style={{ padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 4 }}>
-                  {failureReasons[selectedResult.id]}
+                  {selectedResult.failureReason}
                 </div>
               </div>
             )}
@@ -339,7 +339,7 @@ export const AssertionPanel: React.FC = () => {
                 className="btn btn-primary"
                 onClick={() => {
                   if (selectedResultId) {
-                    setFailureReasons({ ...failureReasons, [selectedResultId]: failReason });
+                    updateResultFailureReason(selectedResultId, failReason);
                   }
                   setShowFailReasonModal(false);
                 }}

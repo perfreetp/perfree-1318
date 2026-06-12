@@ -20,7 +20,8 @@ export const QueuePanel: React.FC = () => {
     replayConfig,
     setReplayConfig,
     setCurrentResults,
-    setActiveTab
+    setActiveTab,
+    addHistoryBatch
   } = useAppStore();
 
   const [showAddRequests, setShowAddRequests] = useState(false);
@@ -85,6 +86,18 @@ export const QueuePanel: React.FC = () => {
         }
       );
       setCurrentResults(results);
+
+      const historyRecords = results.map((r) => ({
+        projectId: r.request.projectId,
+        requestId: r.requestId,
+        request: JSON.parse(JSON.stringify(r.request)),
+        actualRequest: r.actualRequest,
+        response: r.response,
+        passed: r.passed,
+        failureReason: r.failureReason
+      }));
+      addHistoryBatch(historyRecords);
+
       setActiveTab('report');
     } finally {
       setIsRunning(false);

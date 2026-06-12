@@ -86,6 +86,13 @@ export interface RequestResult {
   id: string;
   requestId: string;
   request: ApiRequest;
+  actualRequest?: {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    body?: any;
+    bodyRaw?: string;
+  };
   response?: ApiResponse;
   error?: string;
   assertionResults: AssertionResult[];
@@ -149,8 +156,16 @@ export interface HistoryRecord {
   projectId: string;
   requestId?: string;
   request: ApiRequest;
+  actualRequest?: {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    body?: any;
+    bodyRaw?: string;
+  };
   response?: ApiResponse;
   passed: boolean;
+  failureReason?: string;
   createdAt: number;
 }
 

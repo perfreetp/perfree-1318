@@ -94,6 +94,15 @@ export const ReportPanel: React.FC = () => {
       .forEach((r) => {
         lines.push(`### ${r.request.method} ${r.request.name}`);
         lines.push(`- URL: ${r.request.url}`);
+        if (r.actualRequest) {
+          lines.push(`- 实际URL: ${r.actualRequest.url}`);
+          if (r.actualRequest.bodyRaw) {
+            lines.push('```json');
+            lines.push(r.actualRequest.bodyRaw);
+            lines.push('```');
+          }
+        }
+        if (r.failureReason) lines.push(`- 失败原因: ${r.failureReason}`);
         if (r.error) lines.push(`- 错误: ${r.error}`);
         if (r.response) lines.push(`- 状态码: ${r.response.status} ${r.response.statusText}`);
         r.assertionResults
@@ -260,7 +269,14 @@ export const ReportPanel: React.FC = () => {
                         <td>
                           <span className={`tag ${getMethodTagClass(r.request.method)}`}>{r.request.method}</span>
                         </td>
-                        <td className="truncate">{r.request.name}</td>
+                        <td className="truncate">
+                          {r.request.name}
+                          {r.failureReason && (
+                            <span className="tag tag-warning" style={{ marginLeft: 6 }}>
+                              ⚑ {r.failureReason}
+                            </span>
+                          )}
+                        </td>
                         <td className="text-center">
                           {r.response ? r.response.status : <span className="text-error">ERR</span>}
                         </td>
@@ -316,7 +332,43 @@ export const ReportPanel: React.FC = () => {
                     </>
                   )}
                   {selectedResult.error && <span className="tag tag-error">{selectedResult.error}</span>}
+                  {selectedResult.failureReason && (
+                    <span className="tag tag-warning">⚑ {selectedResult.failureReason}</span>
+                  )}
                 </div>
+
+                {selectedResult.actualRequest && (
+                  <div className="mb-3">
+                    <strong className="text-sm">实际发送请求</strong>
+                    <div className="mt-2">
+                      <div className="text-sm mb-1">
+                        <span className="text-secondary">URL: </span>
+                        {selectedResult.actualRequest.url}
+                      </div>
+                      <div className="text-sm mb-1">
+                        <span className="text-secondary">Method: </span>
+                        {selectedResult.actualRequest.method}
+                      </div>
+                      {selectedResult.actualRequest.bodyRaw && (
+                        <div>
+                          <span className="text-secondary text-sm">Body: </span>
+                          <pre className="json-viewer mt-1" style={{ maxHeight: 150, fontSize: 12 }}>
+                            {selectedResult.actualRequest.bodyRaw}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {selectedResult.failureReason && (
+                  <div className="mb-3">
+                    <strong className="text-sm">失败原因</strong>
+                    <div className="mt-2 text-sm" style={{ padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 4 }}>
+                      {selectedResult.failureReason}
+                    </div>
+                  </div>
+                )}
 
                 <div className="mb-3">
                   <strong className="text-sm">断言 ({selectedResult.assertionResults.filter((a) => a.passed).length}/{selectedResult.assertionResults.length})</strong>

@@ -132,34 +132,34 @@ export const RequestPanel: React.FC = () => {
     setResponseError(null);
     setAssertionResults([]);
 
-    try {
-      const variables = collectVariables(currentEnv?.variables || []);
-      const resp = await sendRequest(currentRequest, variables);
+    const variables = collectVariables(currentEnv?.variables || []);
+    const sendResult = await sendRequest(currentRequest, variables);
+
+    const resp = sendResult.response;
+    if (resp) {
       setResponse(resp);
-
-      const results = runAssertions(resp, currentRequest.assertions || []);
-      setAssertionResults(results);
-
-      const passed = results.length === 0 ? true : results.every((r) => r.passed);
-
-      addHistory({
-        projectId: currentRequest.projectId,
-        requestId: currentRequest.id,
-        request: JSON.parse(JSON.stringify(currentRequest)),
-        response: resp,
-        passed
-      });
-    } catch (err: any) {
-      setResponseError(err.message || err.error || '请求失败');
-      addHistory({
-        projectId: currentRequest!.projectId,
-        requestId: currentRequest!.id,
-        request: JSON.parse(JSON.stringify(currentRequest!)),
-        passed: false
-      });
-    } finally {
-      setLoading(false);
     }
+    if (sendResult.error) {
+      setResponseError(sendResult.error);
+    }
+
+    const results = resp ? runAssertions(resp, currentRequest.assertions || []) : [];
+    setAssertionResults(results);
+
+    const passed = results.length === 0
+      ? !sendResult.error && !!resp
+      : results.every((r) => r.passed);
+
+    addHistory({
+      projectId: currentRequest.projectId,
+      requestId: currentRequest.id,
+      request: JSON.parse(JSON.stringify(currentRequest)),
+      actualRequest: sendResult.actualRequest,
+      response: resp,
+      passed
+    });
+
+    setLoading(false);
   };
 
   const handleImport = () => {
