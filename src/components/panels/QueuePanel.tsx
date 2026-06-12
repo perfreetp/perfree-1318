@@ -94,6 +94,7 @@ export const QueuePanel: React.FC = () => {
         request: JSON.parse(JSON.stringify(r.request)),
         actualRequest: r.actualRequest,
         response: r.response,
+        assertionResults: r.assertionResults,
         passed: r.passed,
         failureReason: r.failureReason
       }));

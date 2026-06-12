@@ -11,7 +11,8 @@ import {
   TabType,
   KeyValuePair,
   HttpMethod,
-  OfflineReport
+  OfflineReport,
+  CollaborationStatus
 } from '@/types';
 import { AppData, loadData, saveData } from './storage';
 import { generateId } from '@/utils';
@@ -66,6 +67,11 @@ interface AppState extends AppData {
 
   importOfflineReport: (report: OfflineReport) => void;
   clearImportedReport: () => void;
+
+  updateResultCollaboration: (
+    resultId: string,
+    data: { comment?: string; assignee?: string; status?: CollaborationStatus }
+  ) => void;
 
   persist: () => void;
 }
@@ -426,6 +432,53 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   clearImportedReport: () => {
     set({ importedReport: null, currentResults: [] });
+  },
+
+  updateResultCollaboration: (resultId, data) => {
+    const state = get();
+    const now = Date.now();
+
+    const updateResults = (results: RequestResult[]): RequestResult[] =>
+      results.map((r) => {
+        if (r.id !== resultId) return r;
+        const existing = r.collaboration || { status: 'pending' as CollaborationStatus, updatedAt: now };
+        return {
+          ...r,
+          collaboration: {
+            ...existing,
+            ...data,
+            updatedAt: now
+          }
+        };
+      });
+
+    const newResults = updateResults(state.currentResults);
+
+    let newImportedReport = state.importedReport;
+    if (state.importedReport) {
+      newImportedReport = {
+        ...state.importedReport,
+        results: updateResults(state.importedReport.results)
+      };
+    }
+
+    let newSnapshots = state.snapshots;
+    const snapshotsNeedUpdate = state.snapshots.some((s) =>
+      s.results.some((r) => r.id === resultId)
+    );
+    if (snapshotsNeedUpdate) {
+      newSnapshots = state.snapshots.map((s) => ({
+        ...s,
+        results: updateResults(s.results)
+      }));
+    }
+
+    set({
+      currentResults: newResults,
+      importedReport: newImportedReport,
+      snapshots: newSnapshots
+    });
+    get().persist();
   },
 
   persist: () => {

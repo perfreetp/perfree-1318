@@ -82,6 +82,15 @@ export interface ApiResponse {
   size: number;
 }
 
+export type CollaborationStatus = 'pending' | 'investigating' | 'resolved' | 'ignored';
+
+export interface ResultCollaboration {
+  comment?: string;
+  assignee?: string;
+  status: CollaborationStatus;
+  updatedAt: number;
+}
+
 export interface RequestResult {
   id: string;
   requestId: string;
@@ -101,6 +110,7 @@ export interface RequestResult {
   startTime: number;
   endTime: number;
   failureReason?: string;
+  collaboration?: ResultCollaboration;
 }
 
 export interface EnvironmentVariable {
@@ -166,6 +176,7 @@ export interface HistoryRecord {
     bodyRaw?: string;
   };
   response?: ApiResponse;
+  assertionResults?: AssertionResult[];
   passed: boolean;
   failureReason?: string;
   createdAt: number;
@@ -181,6 +192,7 @@ export interface OfflineReport {
   name: string;
   description?: string;
   results: RequestResult[];
+  sanitized?: boolean;
 }
 
 export type TabType =

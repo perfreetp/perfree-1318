@@ -2,8 +2,8 @@ import React, { useState, useMemo } from 'react';
 import { useAppStore } from '@/store';
 import { Modal } from '@/components/common/Modal';
 import { KeyValueEditor } from '@/components/common/KeyValueEditor';
-import { formatTime, formatSize, formatDate, generateId } from '@/utils';
-import { HistoryRecord, RequestResult, HistoryFilterType, ApiRequest, KeyValuePair } from '@/types';
+import { formatTime, formatSize, formatDate, formatDateTimeShort, generateId } from '@/utils';
+import { HistoryRecord, RequestResult, HistoryFilterType, ApiRequest, KeyValuePair, AssertionResult } from '@/types';
 import { sendRequest, collectVariables } from '@/services/httpService';
 import { runAssertions } from '@/services/assertionService';
 import { diffJson, diffText, DiffLine } from '@/services/diffService';
@@ -413,6 +413,98 @@ export const HistoryPanel: React.FC = () => {
         return renderDiffLines(diffJson(body1, body2));
       }
       case 'assertions': {
+        const r1Results = record1.assertionResults;
+        const r2Results = record2.assertionResults;
+        const hasAssertionResults = (r1Results && r1Results.length > 0) || (r2Results && r2Results.length > 0);
+
+        const mergedAssertions: Array<{
+          key: string;
+          name: string;
+          r1?: AssertionResult;
+          r2?: AssertionResult;
+        }> = [];
+
+        if (hasAssertionResults) {
+          const map = new Map<string, { key: string; name: string; r1?: AssertionResult; r2?: AssertionResult }>();
+          r1Results?.forEach((a) => {
+            const key = `${a.assertionId}||${a.name}`;
+            map.set(key, { key, name: a.name, r1: a });
+          });
+          r2Results?.forEach((a) => {
+            const key = `${a.assertionId}||${a.name}`;
+            const existing = map.get(key);
+            if (existing) {
+              existing.r2 = a;
+            } else {
+              map.set(key, { key, name: a.name, r2: a });
+            }
+          });
+          mergedAssertions.push(...Array.from(map.values()));
+        }
+
+        const renderAssertionCompareRow = (item: { key: string; name: string; r1?: AssertionResult; r2?: AssertionResult }) => {
+          const { r1, r2, key } = item;
+          const hasDiff = r1 && r2 && (r1.passed !== r2.passed || r1.message !== r2.message || r1.actual !== r2.actual || r1.expected !== r2.expected);
+          const rowBg = hasDiff ? 'rgba(248, 81, 73, 0.08)' : 'transparent';
+
+          const renderCell = (a?: AssertionResult) => {
+            if (!a) {
+              return <span className="text-muted text-sm">无此断言</span>;
+            }
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 12 }}>
+                <div className="flex items-center gap-2">
+                  <span className={`tag ${a.passed ? 'tag-success' : 'tag-error'}`} style={{ fontSize: 11 }}>
+                    {a.passed ? '✓' : '✗'}
+                  </span>
+                  <span className={a.passed ? 'text-success' : 'text-error'}>
+                    {a.passed ? '通过' : '失败'}
+                  </span>
+                </div>
+                {a.expected !== undefined && a.expected !== '' && (
+                  <div className="text-secondary text-sm">
+                    <strong>期望:</strong> {a.expected}
+                  </div>
+                )}
+                {a.actual !== undefined && a.actual !== '' && (
+                  <div className="text-secondary text-sm">
+                    <strong>实际:</strong> {a.actual}
+                  </div>
+                )}
+                {a.message && (
+                  <div className="text-secondary text-sm">
+                    <strong>消息:</strong> {a.message}
+                  </div>
+                )}
+              </div>
+            );
+          };
+
+          return (
+            <div
+              key={item.key}
+              style={{
+                padding: 10,
+                marginBottom: 8,
+                border: hasDiff ? '1px solid rgba(248, 81, 73, 0.3)' : '1px solid var(--border-color)',
+                borderRadius: 4,
+                background: rowBg
+              }}
+            >
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <div className="text-sm text-secondary" style={{ marginBottom: 4, fontWeight: 500 }}>记录 1</div>
+                  {renderCell(r1)}
+                </div>
+                <div>
+                  <div className="text-sm text-secondary" style={{ marginBottom: 4, fontWeight: 500 }}>记录 2</div>
+                  {renderCell(r2)}
+                </div>
+              </div>
+            </div>
+          );
+        };
+
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ display: 'flex', gap: 16, fontSize: 12 }}>
@@ -440,17 +532,40 @@ export const HistoryPanel: React.FC = () => {
                 )}
               </div>
             </div>
-            <div>
-              <strong className="text-sm">断言定义对比</strong>
-              <div className="mt-2">
-                {renderDiffLines(
-                  diffJson(
-                    record1.request.assertions || [],
-                    record2.request.assertions || []
-                  )
+            {hasAssertionResults ? (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <strong className="text-sm">断言结果对比</strong>
+                  <span className="text-secondary text-sm">共 {mergedAssertions.length} 条断言</span>
+                </div>
+                {mergedAssertions.length === 0 ? (
+                  <div className="text-sm text-muted">无断言结果</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    {mergedAssertions.map((item) => (
+                      <div key={item.key}>
+                        <div className="text-sm" style={{ fontWeight: 500, marginBottom: 4 }}>
+                          {item.name}
+                        </div>
+                        {renderAssertionCompareRow(item)}
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
-            </div>
+            ) : (
+              <div>
+                <strong className="text-sm">断言定义对比（无执行结果，仅显示定义）</strong>
+                <div className="mt-2">
+                  {renderDiffLines(
+                    diffJson(
+                      record1.request.assertions || [],
+                      record2.request.assertions || []
+                    )
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         );
       }
@@ -462,6 +577,32 @@ export const HistoryPanel: React.FC = () => {
   const findHistoryIndex = (id: string) => {
     return projectHistory.findIndex((h) => h.id === id) + 1;
   };
+
+  const getInflectionType = (records: HistoryRecord[], index: number): 'to-failed' | 'to-passed' | null => {
+    if (index === 0) return null;
+    const prev = records[index - 1];
+    const curr = records[index];
+    if (prev.passed && !curr.passed) return 'to-failed';
+    if (!prev.passed && curr.passed) return 'to-passed';
+    return null;
+  };
+
+  const getNodeColor = (record: HistoryRecord): string => {
+    if (!record.response) return '#6e7681';
+    return record.passed ? '#2ea043' : '#f85149';
+  };
+
+  const renderAssertionResultItem = (a: AssertionResult) => (
+    <div key={a.assertionId} className="list-item" style={{ padding: '4px 8px', marginBottom: 4 }}>
+      <div className="flex items-center gap-2 flex-1">
+        <span className={`tag ${a.passed ? 'tag-success' : 'tag-error'}`} style={{ fontSize: 11 }}>
+          {a.passed ? '✓' : '✗'}
+        </span>
+        <span className="text-sm">{a.name}</span>
+      </div>
+      <span className="text-secondary text-sm">{a.message}</span>
+    </div>
+  );
 
   if (!selectedProjectId) {
     return (
@@ -725,6 +866,17 @@ export const HistoryPanel: React.FC = () => {
                   )}
                 </div>
 
+                {selectedRecord.assertionResults && selectedRecord.assertionResults.length > 0 && (
+                  <div className="mb-3">
+                    <strong className="text-sm">
+                      断言结果 ({selectedRecord.assertionResults.filter((a) => a.passed).length}/{selectedRecord.assertionResults.length})
+                    </strong>
+                    <div className="mt-2">
+                      {selectedRecord.assertionResults.map((a) => renderAssertionResultItem(a))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="mb-3">
                   <strong className="text-sm">原始请求 URL</strong>
                   <div className="json-viewer mt-2 text-sm">{selectedRecord.request.url}</div>
@@ -872,102 +1024,136 @@ export const HistoryPanel: React.FC = () => {
                 )}
               </div>
             ) : detailTab === 'trend' ? (
-              <div style={{ flex: 1, overflow: 'auto', minHeight: 200, display: 'flex', flexDirection: 'column', gap: 16, padding: 4 }}>
-                {!trendStats ? (
+              <div style={{ flex: 1, overflow: 'auto', minHeight: 200, display: 'flex', flexDirection: 'column', padding: '8px 4px' }}>
+                {sameRequestHistoryAsc.length === 0 ? (
                   <div className="text-center text-muted" style={{ padding: 32 }}>
-                    暂无趋势数据
+                    暂无历史数据
                   </div>
                 ) : (
-                  <>
-                    <div className="card" style={{ padding: 12 }}>
-                      <strong className="text-sm" style={{ display: 'block', marginBottom: 10 }}>通过率趋势</strong>
-                      <div style={{ display: 'flex', gap: 16, marginBottom: 10, fontSize: 12 }}>
-                        <span>总执行: <strong>{trendStats.total}</strong></span>
-                        <span className="text-success">通过: <strong>{trendStats.passedCount}</strong></span>
-                        <span className="text-error">失败: <strong>{trendStats.failedCount}</strong></span>
-                        <span>通过率: <strong>{trendStats.passRate}%</strong></span>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
-                        {sameRequestHistoryAsc.map((h, idx) => (
+                  <div style={{ position: 'relative', paddingLeft: 28 }}>
+                    <div
+                      style={{
+                        position: 'absolute',
+                        left: 9,
+                        top: 6,
+                        bottom: 6,
+                        width: 2,
+                        background: 'var(--border-color)'
+                      }}
+                    />
+                    {sameRequestHistoryAsc.map((record, idx) => {
+                      const inflection = getInflectionType(sameRequestHistoryAsc, idx);
+                      const dotColor = getNodeColor(record);
+                      const isSelected = selectedRecord?.id === record.id;
+                      const isLast = idx === sameRequestHistoryAsc.length - 1;
+                      return (
+                        <div
+                          key={record.id}
+                          style={{
+                            position: 'relative',
+                            marginBottom: isLast ? 0 : 14,
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => handleSelectRecord(record)}
+                        >
                           <div
-                            key={h.id}
-                            title={`#${idx + 1} ${formatDate(h.createdAt)} - ${h.passed ? '通过' : '失败'}${h.response ? ` - ${h.response.status}` : ''}`}
                             style={{
-                              width: 12,
-                              height: 12,
+                              position: 'absolute',
+                              left: -28,
+                              top: 8,
+                              width: 20,
+                              height: 20,
                               borderRadius: '50%',
-                              background: h.passed ? '#2ea043' : '#f85149',
-                              border: '1px solid var(--border-color)',
-                              cursor: 'pointer'
+                              background: dotColor,
+                              border: inflection
+                                ? `3px solid ${inflection === 'to-failed' ? '#f85149' : '#2ea043'}`
+                                : '2px solid var(--bg-primary)',
+                              boxShadow: isSelected ? '0 0 0 3px rgba(31, 111, 235, 0.35)' : undefined,
+                              zIndex: 1
                             }}
-                            onClick={() => handleSelectRecord(h)}
                           />
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="card" style={{ padding: 12 }}>
-                      <strong className="text-sm" style={{ display: 'block', marginBottom: 10 }}>状态码分布</strong>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        {(['2xx', '3xx', '4xx', '5xx', 'no-response'] as const).map((key) => {
-                          const count = trendStats.statusCounts[key];
-                          const percent = trendStats.statusTotal > 0 ? (count / trendStats.statusTotal) * 100 : 0;
-                          const color = key === '2xx' ? '#2ea043' : key === '3xx' ? '#d29922' : key === '4xx' ? '#db6d28' : key === '5xx' ? '#f85149' : '#6e7681';
-                          const label = key === 'no-response' ? '无响应' : key;
-                          return (
-                            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <span style={{ width: 60, fontSize: 12 }}>{label}</span>
-                              <div style={{ flex: 1, height: 16, background: 'var(--bg-secondary)', borderRadius: 3, overflow: 'hidden' }}>
-                                <div style={{ width: `${percent}%`, height: '100%', background: color, transition: 'width 0.3s' }} />
-                              </div>
-                              <span style={{ width: 40, fontSize: 12, textAlign: 'right' }}>{count}</span>
+                          <div
+                            className={`card ${isSelected ? 'active' : ''}`}
+                            style={{
+                              padding: 10,
+                              border: isSelected
+                                ? '1px solid var(--primary)'
+                                : '1px solid var(--border-color)',
+                              background: isSelected
+                                ? 'var(--bg-primary)'
+                                : 'var(--bg-secondary)'
+                            }}
+                          >
+                            <div className="flex items-center gap-2 flex-wrap" style={{ marginBottom: 6 }}>
+                              <span className="text-secondary text-sm" style={{ fontWeight: 500 }}>
+                                {formatDateTimeShort(record.createdAt)}
+                              </span>
+                              <span className="text-secondary text-sm">
+                                #{idx + 1}
+                              </span>
+                              <span className={`tag ${record.passed ? 'tag-success' : 'tag-error'}`} style={{ fontSize: 11 }}>
+                                {record.passed ? '✓ 通过' : '✗ 失败'}
+                              </span>
+                              {record.sourceHistoryId && (
+                                <span className="tag tag-info" style={{ fontSize: 11 }}>
+                                  从历史 #{findHistoryIndex(record.sourceHistoryId)} 复跑
+                                </span>
+                              )}
+                              {inflection === 'to-failed' && (
+                                <span className="tag tag-error" style={{ fontSize: 11 }}>
+                                  🔴 从通过变失败
+                                </span>
+                              )}
+                              {inflection === 'to-passed' && (
+                                <span className="tag tag-success" style={{ fontSize: 11 }}>
+                                  🟢 从失败恢复
+                                </span>
+                              )}
                             </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <div className="card" style={{ padding: 12 }}>
-                      <strong className="text-sm" style={{ display: 'block', marginBottom: 10 }}>耗时变化</strong>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        {sameRequestHistoryAsc.map((h, idx) => {
-                          const time = h.response?.time || 0;
-                          const percent = trendStats.timePercent(time);
-                          return (
-                            <div key={h.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <span style={{ width: 30, fontSize: 11, color: 'var(--text-secondary)' }}>#{idx + 1}</span>
-                              <div style={{ flex: 1, height: 12, background: 'var(--bg-secondary)', borderRadius: 2, overflow: 'hidden' }}>
-                                <div style={{ width: `${percent}%`, height: '100%', background: '#1f6feb', transition: 'width 0.3s' }} />
-                              </div>
-                              <span style={{ width: 60, fontSize: 12, textAlign: 'right' }}>{time}ms</span>
+                            <div className="flex items-center gap-2 flex-wrap" style={{ marginBottom: 6 }}>
+                              {record.response ? (
+                                <>
+                                  <span className="tag" style={{ fontSize: 11 }}>
+                                    {record.response.status} {record.response.statusText}
+                                  </span>
+                                  <span className="tag tag-info" style={{ fontSize: 11 }}>
+                                    {formatTime(record.response.time)}
+                                  </span>
+                                </>
+                              ) : (
+                                <span className="tag" style={{ fontSize: 11, background: 'var(--bg-secondary)' }}>
+                                  无响应
+                                </span>
+                              )}
                             </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <div className="card" style={{ padding: 12 }}>
-                      <strong className="text-sm" style={{ display: 'block', marginBottom: 10 }}>失败原因统计</strong>
-                      {trendStats.failureReasons.length === 0 ? (
-                        <div className="text-sm text-muted">暂无失败记录</div>
-                      ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                          {trendStats.failureReasons.map(([reason, count]) => {
-                            const percent = trendStats.statusTotal > 0 ? (count / trendStats.statusTotal) * 100 : 0;
-                            return (
-                              <div key={reason} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                <div style={{ flex: 1, height: 16, background: 'var(--bg-secondary)', borderRadius: 3, overflow: 'hidden', position: 'relative' }}>
-                                  <div style={{ width: `${percent}%`, height: '100%', background: '#f85149', transition: 'width 0.3s' }} />
-                                  <span style={{ position: 'absolute', left: 8, top: 0, fontSize: 11, lineHeight: '16px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '80%' }}>{reason}</span>
+                            {record.failureReason && (
+                              <div className="text-sm" style={{ marginBottom: 6, color: 'var(--text-secondary)' }}>
+                                <span style={{ fontWeight: 500 }}>失败原因：</span>
+                                {record.failureReason}
+                              </div>
+                            )}
+                            {record.assertionResults && record.assertionResults.length > 0 && (
+                              <div>
+                                <div className="text-sm" style={{ marginBottom: 4, color: 'var(--text-secondary)', fontWeight: 500 }}>
+                                  断言结果 ({record.assertionResults.filter(a => a.passed).length}/{record.assertionResults.length})
                                 </div>
-                                <span style={{ width: 40, fontSize: 12, textAlign: 'right' }}>{count}次</span>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                  {record.assertionResults.filter(a => !a.passed).slice(0, 3).map(a => renderAssertionResultItem(a))}
+                                  {record.assertionResults.filter(a => !a.passed).length > 3 && (
+                                    <div className="text-secondary text-sm" style={{ paddingLeft: 4 }}>
+                                      ...还有 {record.assertionResults.filter(a => !a.passed).length - 3} 条失败断言
+                                    </div>
+                                  )}
+                                  {record.assertionResults.filter(a => !a.passed).length === 0 &&
+                                    record.assertionResults.slice(0, 2).map(a => renderAssertionResultItem(a))}
+                                </div>
                               </div>
-                            );
-                          })}
+                            )}
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  </>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             ) : (

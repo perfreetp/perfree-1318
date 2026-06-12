@@ -159,6 +159,7 @@ export const RequestPanel: React.FC = () => {
       request: JSON.parse(JSON.stringify(currentRequest)),
       actualRequest: sendResult.actualRequest,
       response: resp,
+      assertionResults,
       passed
     });
 
