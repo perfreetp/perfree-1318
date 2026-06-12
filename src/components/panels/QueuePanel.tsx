@@ -90,6 +90,7 @@ export const QueuePanel: React.FC = () => {
       const historyRecords = results.map((r) => ({
         projectId: r.request.projectId,
         requestId: r.requestId,
+        resultId: r.id,
         request: JSON.parse(JSON.stringify(r.request)),
         actualRequest: r.actualRequest,
         response: r.response,

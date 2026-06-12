@@ -143,12 +143,15 @@ export const RequestPanel: React.FC = () => {
       setResponseError(sendResult.error);
     }
 
-    const results = resp ? runAssertions(resp, currentRequest.assertions || []) : [];
-    setAssertionResults(results);
+    const assertionResults = resp ? runAssertions(resp, currentRequest.assertions || []) : [];
+    setAssertionResults(assertionResults);
 
-    const passed = results.length === 0
-      ? !sendResult.error && !!resp
-      : results.every((r) => r.passed);
+    let passed = true;
+    if (sendResult.error || sendResult.bodyParseError) {
+      passed = false;
+    } else if (assertionResults.length > 0) {
+      passed = assertionResults.every((a) => a.passed);
+    }
 
     addHistory({
       projectId: currentRequest.projectId,

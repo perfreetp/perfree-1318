@@ -155,6 +155,7 @@ export interface HistoryRecord {
   id: string;
   projectId: string;
   requestId?: string;
+  resultId?: string;
   request: ApiRequest;
   actualRequest?: {
     url: string;

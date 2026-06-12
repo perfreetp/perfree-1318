@@ -54,9 +54,13 @@ export class ReplayEngine {
       const assertionResults = resp
         ? runAssertions(resp, request.assertions || [])
         : [];
-      const passed = assertionResults.length === 0
-        ? !sendResult.error && !!resp
-        : assertionResults.every((a) => a.passed);
+
+      let passed = true;
+      if (sendResult.error || sendResult.bodyParseError) {
+        passed = false;
+      } else if (assertionResults.length > 0) {
+        passed = assertionResults.every((a) => a.passed);
+      }
 
       let extracted: Record<string, string> = {};
       if (config.extractPrevious && resp) {
@@ -164,11 +168,10 @@ export class ReplayEngine {
       await Promise.all(workers);
     }
 
-    const filtered = this.filterByStatus(results, config.statusFilter);
-    return filtered;
+    return results;
   }
 
-  private filterByStatus(
+  filterResultsByStatus(
     results: RequestResult[],
     filter: ReplayConfig['statusFilter']
   ): RequestResult[] {

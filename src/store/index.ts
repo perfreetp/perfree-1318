@@ -58,6 +58,7 @@ interface AppState extends AppData {
   addHistory: (record: Omit<HistoryRecord, 'id' | 'createdAt'>) => void;
   addHistoryBatch: (records: Omit<HistoryRecord, 'id' | 'createdAt'>[]) => void;
   updateResultFailureReason: (resultId: string, reason: string) => void;
+  updateHistoryFailureReason: (historyId: string, reason: string) => void;
   clearHistory: (projectId?: string) => void;
   clearExpiredHistory: (days: number) => void;
 
@@ -375,7 +376,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     const newResults = state.currentResults.map((r) =>
       r.id === resultId ? { ...r, failureReason: reason } : r
     );
-    set({ currentResults: newResults });
+    const newHistory = state.history.map((h) =>
+      h.resultId === resultId ? { ...h, failureReason: reason } : h
+    );
+    set({ currentResults: newResults, history: newHistory });
+    get().persist();
+  },
+
+  updateHistoryFailureReason: (historyId, reason) => {
+    const state = get();
+    const newHistory = state.history.map((h) =>
+      h.id === historyId ? { ...h, failureReason: reason } : h
+    );
+    const record = state.history.find((h) => h.id === historyId);
+    let newResults = state.currentResults;
+    if (record?.resultId) {
+      newResults = state.currentResults.map((r) =>
+        r.id === record.resultId ? { ...r, failureReason: reason } : r
+      );
+    }
+    set({ history: newHistory, currentResults: newResults });
+    get().persist();
   },
 
   clearHistory: (projectId) => {

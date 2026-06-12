@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useAppStore } from '@/store';
 import { Modal } from '@/components/common/Modal';
 import { formatTime, formatSize, formatDate } from '@/utils';
-import { RequestResult, ReplaySnapshot } from '@/types';
+import { RequestResult, ReplaySnapshot, ReplayConfig } from '@/types';
+import { replayEngine } from '@/services/replayEngine';
 
 export const ReportPanel: React.FC = () => {
   const {
@@ -13,7 +14,8 @@ export const ReportPanel: React.FC = () => {
     deleteSnapshot,
     replayConfig,
     environments,
-    selectedEnvironmentId
+    selectedEnvironmentId,
+    setReplayConfig
   } = useAppStore();
 
   const [showSaveModal, setShowSaveModal] = useState(false);
@@ -24,10 +26,13 @@ export const ReportPanel: React.FC = () => {
   const projectSnapshots = snapshots.filter((s) => s.projectId === selectedProjectId);
   const currentEnv = environments.find((e) => e.id === selectedEnvironmentId);
 
-  const displayResults = viewingSnapshot ? viewingSnapshot.results : currentResults;
+  const allResults = viewingSnapshot ? viewingSnapshot.results : currentResults;
   const displayConfig = viewingSnapshot ? viewingSnapshot.config : replayConfig;
+  const displayResults = replayEngine.filterResultsByStatus(allResults, displayConfig.statusFilter);
   const selectedResult = displayResults.find((r) => r.id === selectedResultId);
 
+  const totalPassed = allResults.filter((r) => r.passed).length;
+  const totalFailed = allResults.length - totalPassed;
   const passed = displayResults.filter((r) => r.passed).length;
   const failed = displayResults.length - passed;
   const avgTime =
@@ -61,11 +66,12 @@ export const ReportPanel: React.FC = () => {
     lines.push(`环境: ${currentEnv?.name || '未选择'}`);
     lines.push('');
     lines.push('## 概览');
-    lines.push(`- 总请求数: ${displayResults.length}`);
-    lines.push(`- 通过: ${passed}`);
-    lines.push(`- 失败: ${failed}`);
-    lines.push(`- 通过率: ${displayResults.length > 0 ? ((passed / displayResults.length) * 100).toFixed(1) : 0}%`);
+    lines.push(`- 总请求数: ${allResults.length}`);
+    lines.push(`- 通过: ${totalPassed}`);
+    lines.push(`- 失败: ${totalFailed}`);
+    lines.push(`- 通过率: ${allResults.length > 0 ? ((totalPassed / allResults.length) * 100).toFixed(1) : 0}%`);
     lines.push(`- 平均响应时间: ${formatTime(avgTime)}`);
+    lines.push(`- 当前筛选: ${displayConfig.statusFilter} (仅展示，不影响数据)`);
     lines.push('');
     lines.push('## 回放配置');
     lines.push(`- 并发数: ${displayConfig.concurrency}`);
@@ -74,22 +80,22 @@ export const ReportPanel: React.FC = () => {
     lines.push(`- 串联变量: ${displayConfig.extractPrevious ? '是' : '否'}`);
     lines.push(`- 遇错即停: ${displayConfig.stopOnFailure ? '是' : '否'}`);
     lines.push('');
-    lines.push('## 详细结果');
+    lines.push('## 详细结果 (全部)');
     lines.push('');
-    lines.push('| # | 结果 | 方法 | 名称 | 状态码 | 耗时 | 断言 |');
-    lines.push('|---|------|------|------|--------|------|------|');
-    displayResults.forEach((r, i) => {
+    lines.push('| # | 结果 | 方法 | 名称 | 状态码 | 耗时 | 断言 | 失败原因 |');
+    lines.push('|---|------|------|------|--------|------|------|----------|');
+    allResults.forEach((r, i) => {
       const assertPass = r.assertionResults.filter((a) => a.passed).length;
       const assertTotal = r.assertionResults.length;
       lines.push(
         `| ${i + 1} | ${r.passed ? '✓ 通过' : '✗ 失败'} | ${r.request.method} | ${r.request.name} | ${
           r.response?.status || 'ERR'
-        } | ${formatTime(r.response?.time || 0)} | ${assertPass}/${assertTotal} |`
+        } | ${formatTime(r.response?.time || 0)} | ${assertPass}/${assertTotal} | ${r.failureReason || '-'} |`
       );
     });
     lines.push('');
     lines.push('## 失败详情');
-    displayResults
+    allResults
       .filter((r) => !r.passed)
       .forEach((r) => {
         lines.push(`### ${r.request.method} ${r.request.name}`);
@@ -144,7 +150,10 @@ export const ReportPanel: React.FC = () => {
       exportedAt: Date.now(),
       environment: currentEnv?.name,
       config: displayConfig,
-      results: displayResults
+      filter: displayConfig.statusFilter,
+      totalCount: allResults.length,
+      filteredCount: displayResults.length,
+      results: allResults
     };
     try {
       if ((window as any).electronAPI) {
@@ -187,6 +196,23 @@ export const ReportPanel: React.FC = () => {
           结果报告 {viewingSnapshot ? ` - 查看快照: ${viewingSnapshot.name}` : ''}
         </h2>
         <div className="toolbar">
+          {!viewingSnapshot && (
+            <select
+              className="select"
+              style={{ width: 140 }}
+              value={displayConfig.statusFilter}
+              onChange={(e) => setReplayConfig({ statusFilter: e.target.value as ReplayConfig['statusFilter'] })}
+              disabled={currentResults.length === 0}
+            >
+              <option value="all">全部结果</option>
+              <option value="passed">仅通过</option>
+              <option value="failed">仅失败</option>
+              <option value="2xx">2xx</option>
+              <option value="3xx">3xx</option>
+              <option value="4xx">4xx</option>
+              <option value="5xx">5xx</option>
+            </select>
+          )}
           {viewingSnapshot && (
             <button className="btn" onClick={() => { setViewingSnapshot(null); setSelectedResultId(null); }}>
               ← 返回当前结果
@@ -197,7 +223,7 @@ export const ReportPanel: React.FC = () => {
               💾 保存快照
             </button>
           )}
-          {displayResults.length > 0 && (
+          {allResults.length > 0 && (
             <>
               <button className="btn" onClick={handleExportReport}>
                 📄 导出报告
@@ -213,15 +239,18 @@ export const ReportPanel: React.FC = () => {
       <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div className="grid-4">
           <div className="stat-card">
-            <div className="value">{displayResults.length}</div>
+            <div className="value">{allResults.length}</div>
             <div className="label">总请求数</div>
+            {displayResults.length !== allResults.length && (
+              <div className="text-xs text-secondary mt-1">显示 {displayResults.length} 条</div>
+            )}
           </div>
           <div className="stat-card">
-            <div className="value text-success">{passed}</div>
+            <div className="value text-success">{totalPassed}</div>
             <div className="label">通过</div>
           </div>
           <div className="stat-card">
-            <div className="value text-error">{failed}</div>
+            <div className="value text-error">{totalFailed}</div>
             <div className="label">失败</div>
           </div>
           <div className="stat-card">
