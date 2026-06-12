@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useAppStore } from '@/store';
 import { Modal } from '@/components/common/Modal';
 import { formatTime, formatSize, formatDate } from '@/utils';
-import { RequestResult, ReplaySnapshot, ReplayConfig } from '@/types';
+import { RequestResult, ReplaySnapshot, ReplayConfig, OfflineReport } from '@/types';
 import { replayEngine } from '@/services/replayEngine';
 
 export const ReportPanel: React.FC = () => {
@@ -15,7 +15,10 @@ export const ReportPanel: React.FC = () => {
     replayConfig,
     environments,
     selectedEnvironmentId,
-    setReplayConfig
+    setReplayConfig,
+    importedReport,
+    importOfflineReport,
+    clearImportedReport
   } = useAppStore();
 
   const [showSaveModal, setShowSaveModal] = useState(false);
@@ -23,11 +26,24 @@ export const ReportPanel: React.FC = () => {
   const [viewingSnapshot, setViewingSnapshot] = useState<ReplaySnapshot | null>(null);
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null);
 
+  const [showExportReportModal, setShowExportReportModal] = useState(false);
+  const [exportReportName, setExportReportName] = useState('');
+  const [exportReportDesc, setExportReportDesc] = useState('');
+  const [showImportError, setShowImportError] = useState('');
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const projectSnapshots = snapshots.filter((s) => s.projectId === selectedProjectId);
   const currentEnv = environments.find((e) => e.id === selectedEnvironmentId);
 
-  const allResults = viewingSnapshot ? viewingSnapshot.results : currentResults;
-  const displayConfig = viewingSnapshot ? viewingSnapshot.config : replayConfig;
+  const allResults = importedReport
+    ? importedReport.results
+    : viewingSnapshot
+    ? viewingSnapshot.results
+    : currentResults;
+  const displayConfig = viewingSnapshot
+    ? viewingSnapshot.config
+    : replayConfig;
   const displayResults = replayEngine.filterResultsByStatus(allResults, displayConfig.statusFilter);
   const selectedResult = displayResults.find((r) => r.id === selectedResultId);
 
@@ -176,6 +192,75 @@ export const ReportPanel: React.FC = () => {
     }
   };
 
+  const handleOpenExportReportModal = () => {
+    const defaultName = `回放报告-${formatDate(Date.now()).replace(/[\/\s:]/g, '-')}`;
+    setExportReportName(defaultName);
+    setExportReportDesc('');
+    setShowExportReportModal(true);
+  };
+
+  const handleExportOfflineReport = async () => {
+    if (!exportReportName.trim()) return;
+
+    const report: OfflineReport = {
+      version: '1.0.0',
+      exportedAt: Date.now(),
+      environmentName: importedReport ? importedReport.environmentName : currentEnv?.name,
+      config: importedReport ? importedReport.config : displayConfig,
+      name: exportReportName.trim(),
+      description: exportReportDesc.trim() || undefined,
+      results: allResults
+    };
+
+    const content = JSON.stringify(report, null, 2);
+    const filename = `${exportReportName.trim()}.report.json`;
+
+    try {
+      if ((window as any).electronAPI) {
+        await (window as any).electronAPI.saveFile(
+          filename,
+          content,
+          [{ name: 'API 回放报告', extensions: ['report.json', 'json'] }]
+        );
+      } else {
+        const blob = new Blob([content], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setShowExportReportModal(false);
+    }
+  };
+
+  const handleImportOfflineReport = async (file: File) => {
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text) as OfflineReport;
+
+      if (!data.version || !data.results || !Array.isArray(data.results)) {
+        throw new Error('文件格式不正确：缺少 version 或 results 字段');
+      }
+
+      importOfflineReport(data);
+      setViewingSnapshot(null);
+      setSelectedResultId(null);
+      setShowImportError('');
+    } catch (e: any) {
+      setShowImportError(e.message || '文件解析失败');
+    }
+  };
+
+  const handleTriggerImportFile = () => {
+    setShowImportError('');
+    fileInputRef.current?.click();
+  };
+
   if (!selectedProjectId) {
     return (
       <div className="panel">
@@ -193,10 +278,26 @@ export const ReportPanel: React.FC = () => {
     <div className="panel">
       <div className="panel-header">
         <h2>
-          结果报告 {viewingSnapshot ? ` - 查看快照: ${viewingSnapshot.name}` : ''}
+          结果报告{' '}
+          {importedReport
+            ? ` - 导入报告: ${importedReport.name}`
+            : viewingSnapshot
+            ? ` - 查看快照: ${viewingSnapshot.name}`
+            : ''}
         </h2>
         <div className="toolbar">
-          {!viewingSnapshot && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,.report.json"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleImportOfflineReport(file);
+              e.target.value = '';
+            }}
+          />
+          {!importedReport && !viewingSnapshot && (
             <select
               className="select"
               style={{ width: 140 }}
@@ -213,28 +314,63 @@ export const ReportPanel: React.FC = () => {
               <option value="5xx">5xx</option>
             </select>
           )}
+          {importedReport && (
+            <button className="btn" onClick={() => { clearImportedReport(); setSelectedResultId(null); }}>
+              ← 退出导入报告
+            </button>
+          )}
           {viewingSnapshot && (
             <button className="btn" onClick={() => { setViewingSnapshot(null); setSelectedResultId(null); }}>
               ← 返回当前结果
             </button>
           )}
-          {!viewingSnapshot && currentResults.length > 0 && (
+          <button className="btn" onClick={handleTriggerImportFile}>
+            📥 导入报告
+          </button>
+          {!importedReport && !viewingSnapshot && currentResults.length > 0 && (
             <button className="btn" onClick={() => { setSnapshotName(`回放快照 ${formatDate(Date.now())}`); setShowSaveModal(true); }}>
               💾 保存快照
             </button>
           )}
           {allResults.length > 0 && (
             <>
+              <button className="btn" onClick={handleOpenExportReportModal}>
+                � 导出离线报告
+              </button>
               <button className="btn" onClick={handleExportReport}>
-                📄 导出报告
+                📄 导出 Markdown
               </button>
               <button className="btn" onClick={handleExportJson}>
-                📦 导出 JSON
+                � 导出 JSON
               </button>
             </>
           )}
         </div>
       </div>
+
+      {importedReport && (
+        <div style={{ padding: '8px 16px', background: 'rgba(56, 139, 253, 0.1)', borderBottom: '1px solid var(--border-color)' }}>
+          <span className="tag tag-info">导入报告</span>
+          <span className="text-sm" style={{ marginLeft: 8 }}>
+            {importedReport.name}
+            {importedReport.description && ` - ${importedReport.description}`}
+          </span>
+          <span className="text-secondary text-sm" style={{ marginLeft: 12 }}>
+            导出时间: {formatDate(importedReport.exportedAt)}
+          </span>
+          {importedReport.environmentName && (
+            <span className="text-secondary text-sm" style={{ marginLeft: 12 }}>
+              环境: {importedReport.environmentName}
+            </span>
+          )}
+        </div>
+      )}
+
+      {showImportError && (
+        <div style={{ padding: '8px 16px', background: 'rgba(248, 81, 73, 0.1)', color: '#f85149', borderBottom: '1px solid var(--border-color)' }}>
+          ⚠ 导入失败: {showImportError}
+        </div>
+      )}
 
       <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div className="grid-4">
@@ -511,6 +647,58 @@ export const ReportPanel: React.FC = () => {
           </div>
           <p className="text-secondary text-sm">
             将保存 {currentResults.length} 条请求结果，供后续对比分析
+          </p>
+        </Modal>
+      )}
+
+      {showExportReportModal && (
+        <Modal
+          title="导出离线报告包"
+          onClose={() => setShowExportReportModal(false)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setShowExportReportModal(false)}>取消</button>
+              <button className="btn btn-primary" onClick={handleExportOfflineReport}>导出</button>
+            </>
+          }
+        >
+          <div className="form-row">
+            <label>报告名称</label>
+            <input
+              type="text"
+              className="input"
+              value={exportReportName}
+              onChange={(e) => setExportReportName(e.target.value)}
+              autoFocus
+            />
+          </div>
+          <div className="form-row">
+            <label>描述（可选）</label>
+            <textarea
+              className="input"
+              style={{ minHeight: 80, resize: 'vertical' }}
+              value={exportReportDesc}
+              onChange={(e) => setExportReportDesc(e.target.value)}
+              placeholder="添加报告说明，例如回归测试版本、问题说明等..."
+            />
+          </div>
+          <div style={{ padding: '10px 12px', background: 'var(--bg-secondary)', borderRadius: 4 }}>
+            <div className="text-sm text-secondary mb-2">导出内容：</div>
+            <div className="text-sm">
+              • {allResults.length} 条请求结果（含请求/响应/断言）
+            </div>
+            <div className="text-sm">
+              • 环境: {importedReport ? importedReport.environmentName : currentEnv?.name || '未选择'}
+            </div>
+            <div className="text-sm">
+              • 失败原因
+            </div>
+            <div className="text-sm">
+              • 回放配置
+            </div>
+          </div>
+          <p className="text-secondary text-sm mt-3">
+            导出后生成 .report.json 文件，可分享给他人在工具中导入查看
           </p>
         </Modal>
       )}

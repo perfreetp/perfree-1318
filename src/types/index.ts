@@ -156,6 +156,7 @@ export interface HistoryRecord {
   projectId: string;
   requestId?: string;
   resultId?: string;
+  sourceHistoryId?: string;
   request: ApiRequest;
   actualRequest?: {
     url: string;
@@ -168,6 +169,18 @@ export interface HistoryRecord {
   passed: boolean;
   failureReason?: string;
   createdAt: number;
+}
+
+export type HistoryFilterType = 'all' | 'passed' | 'failed' | '2xx' | '3xx' | '4xx' | '5xx';
+
+export interface OfflineReport {
+  version: string;
+  exportedAt: number;
+  environmentName?: string;
+  config?: ReplayConfig;
+  name: string;
+  description?: string;
+  results: RequestResult[];
 }
 
 export type TabType =

@@ -1,13 +1,15 @@
 import React, { useState, useMemo } from 'react';
 import { useAppStore } from '@/store';
 import { Modal } from '@/components/common/Modal';
+import { KeyValueEditor } from '@/components/common/KeyValueEditor';
 import { formatTime, formatSize, formatDate, generateId } from '@/utils';
-import { HistoryRecord, RequestResult } from '@/types';
+import { HistoryRecord, RequestResult, HistoryFilterType, ApiRequest, KeyValuePair } from '@/types';
 import { sendRequest, collectVariables } from '@/services/httpService';
 import { runAssertions } from '@/services/assertionService';
 import { diffJson, diffText, DiffLine } from '@/services/diffService';
 
-type DetailTabType = 'detail' | 'requestHistory' | 'compare';
+type DetailTabType = 'detail' | 'requestHistory' | 'compare' | 'trend';
+type RerunBodyType = 'none' | 'json' | 'raw' | 'form-data' | 'x-www-form-urlencoded';
 
 export const HistoryPanel: React.FC = () => {
   const {
@@ -27,7 +29,7 @@ export const HistoryPanel: React.FC = () => {
   } = useAppStore();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterPassed, setFilterPassed] = useState<'all' | 'passed' | 'failed'>('all');
+  const [filterType, setFilterType] = useState<HistoryFilterType>('all');
   const [selectedRecord, setSelectedRecord] = useState<HistoryRecord | null>(null);
   const [showClearModal, setShowClearModal] = useState(false);
   const [clearDays, setClearDays] = useState(7);
@@ -43,22 +45,53 @@ export const HistoryPanel: React.FC = () => {
 
   const [isReplaying, setIsReplaying] = useState(false);
 
+  const [showRerunModal, setShowRerunModal] = useState(false);
+  const [rerunRecord, setRerunRecord] = useState<HistoryRecord | null>(null);
+  const [rerunEnvId, setRerunEnvId] = useState<string>('');
+  const [rerunHeaders, setRerunHeaders] = useState<KeyValuePair[]>([]);
+  const [rerunBodyType, setRerunBodyType] = useState<RerunBodyType>('none');
+  const [rerunBodyJson, setRerunBodyJson] = useState('');
+  const [rerunBodyRaw, setRerunBodyRaw] = useState('');
+  const [rerunBodyFormData, setRerunBodyFormData] = useState<KeyValuePair[]>([]);
+  const [rerunBodyUrlEncoded, setRerunBodyUrlEncoded] = useState<KeyValuePair[]>([]);
+
   const projectHistory = history.filter((h) => h.projectId === selectedProjectId);
   const currentEnv = environments.find((e) => e.id === selectedEnvironmentId);
 
-  const filteredHistory = projectHistory.filter((h) => {
-    if (filterPassed === 'passed' && !h.passed) return false;
-    if (filterPassed === 'failed' && h.passed) return false;
+  const filterHistoryRecords = (records: HistoryRecord[], filter: HistoryFilterType): HistoryRecord[] => {
+    switch (filter) {
+      case 'all':
+        return records;
+      case 'passed':
+        return records.filter((h) => h.passed === true);
+      case 'failed':
+        return records.filter((h) => h.passed === false);
+      case '2xx':
+        return records.filter((h) => h.response && h.response.status >= 200 && h.response.status < 300);
+      case '3xx':
+        return records.filter((h) => h.response && h.response.status >= 300 && h.response.status < 400);
+      case '4xx':
+        return records.filter((h) => h.response && h.response.status >= 400 && h.response.status < 500);
+      case '5xx':
+        return records.filter((h) => h.response && h.response.status >= 500 && h.response.status < 600);
+      default:
+        return records;
+    }
+  };
+
+  const filteredHistory = useMemo(() => {
+    let result = projectHistory;
+    result = filterHistoryRecords(result, filterType);
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
-      return (
+      result = result.filter((h) =>
         h.request.name.toLowerCase().includes(q) ||
         h.request.url.toLowerCase().includes(q) ||
         h.request.method.toLowerCase().includes(q)
       );
     }
-    return true;
-  });
+    return result;
+  }, [projectHistory, filterType, searchQuery]);
 
   const sameRequestHistory = useMemo(() => {
     if (!selectedRecord?.requestId) return [];
@@ -67,12 +100,63 @@ export const HistoryPanel: React.FC = () => {
       .sort((a, b) => b.createdAt - a.createdAt);
   }, [selectedRecord, projectHistory]);
 
+  const sameRequestHistoryAsc = useMemo(() => {
+    return [...sameRequestHistory].sort((a, b) => a.createdAt - b.createdAt);
+  }, [sameRequestHistory]);
+
   const compareRecords = useMemo(() => {
     if (compareRecordIds.length !== 2) return [null, null];
     const record1 = projectHistory.find((h) => h.id === compareRecordIds[0]);
     const record2 = projectHistory.find((h) => h.id === compareRecordIds[1]);
     return [record1 || null, record2 || null];
   }, [compareRecordIds, projectHistory]);
+
+  const trendStats = useMemo(() => {
+    if (sameRequestHistoryAsc.length === 0) {
+      return null;
+    }
+    const total = sameRequestHistoryAsc.length;
+    const passedCount = sameRequestHistoryAsc.filter((h) => h.passed).length;
+    const failedCount = total - passedCount;
+    const passRate = total > 0 ? ((passedCount / total) * 100).toFixed(1) : '0';
+
+    const statusCounts = { '2xx': 0, '3xx': 0, '4xx': 0, '5xx': 0, 'no-response': 0 };
+    let maxTime = 0;
+    const failureReasons: Record<string, number> = {};
+
+    sameRequestHistoryAsc.forEach((h) => {
+      if (h.response) {
+        const s = h.response.status;
+        if (s >= 200 && s < 300) statusCounts['2xx']++;
+        else if (s >= 300 && s < 400) statusCounts['3xx']++;
+        else if (s >= 400 && s < 500) statusCounts['4xx']++;
+        else if (s >= 500 && s < 600) statusCounts['5xx']++;
+        if (h.response.time > maxTime) maxTime = h.response.time;
+      } else {
+        statusCounts['no-response']++;
+      }
+      if (h.failureReason) {
+        failureReasons[h.failureReason] = (failureReasons[h.failureReason] || 0) + 1;
+      }
+    });
+
+    const statusTotal = total;
+    const timePercent = (time: number) => (maxTime > 0 ? (time / maxTime) * 100 : 0);
+
+    const sortedFailureReasons = Object.entries(failureReasons).sort((a, b) => b[1] - a[1]);
+
+    return {
+      total,
+      passedCount,
+      failedCount,
+      passRate,
+      statusCounts,
+      statusTotal,
+      maxTime,
+      timePercent,
+      failureReasons: sortedFailureReasons
+    };
+  }, [sameRequestHistoryAsc]);
 
   const getMethodTagClass = (method: string) => {
     const m = method.toUpperCase();
@@ -99,18 +183,47 @@ export const HistoryPanel: React.FC = () => {
     setActiveTab('request');
   };
 
-  const handleRerun = async (record: HistoryRecord) => {
-    if (isReplaying) return;
+  const handleOpenRerunModal = (record: HistoryRecord) => {
+    setRerunRecord(record);
+    setRerunEnvId(selectedEnvironmentId || environments[0]?.id || '');
+    setRerunHeaders(record.request.headers.filter((h) => h.enabled).map((h) => ({ ...h })));
+    const rawBodyType = record.request.body.type;
+    const bodyType: RerunBodyType = rawBodyType === 'binary' ? 'raw' : (rawBodyType as RerunBodyType) || 'none';
+    setRerunBodyType(bodyType);
+    setRerunBodyJson(record.request.body.json || '');
+    setRerunBodyRaw(record.request.body.raw || '');
+    setRerunBodyFormData((record.request.body.formData || []).map((h) => ({ ...h })));
+    setRerunBodyUrlEncoded((record.request.body.urlEncoded || []).map((h) => ({ ...h })));
+    setShowRerunModal(true);
+  };
+
+  const handleConfirmRerun = async () => {
+    if (!rerunRecord || isReplaying) return;
     setIsReplaying(true);
 
     try {
-      const envVars = currentEnv?.variables || [];
+      const targetEnv = environments.find((e) => e.id === rerunEnvId);
+      const envVars = targetEnv?.variables || [];
       const variables = collectVariables(envVars);
 
-      const sendResult = await sendRequest(record.request, variables);
+      const newBody: ApiRequest['body'] = {
+        type: rerunBodyType,
+        json: rerunBodyType === 'json' ? rerunBodyJson : undefined,
+        raw: rerunBodyType === 'raw' ? rerunBodyRaw : undefined,
+        formData: rerunBodyType === 'form-data' ? rerunBodyFormData : undefined,
+        urlEncoded: rerunBodyType === 'x-www-form-urlencoded' ? rerunBodyUrlEncoded : undefined
+      };
+
+      const modifiedRequest: ApiRequest = {
+        ...rerunRecord.request,
+        headers: rerunHeaders,
+        body: newBody
+      };
+
+      const sendResult = await sendRequest(modifiedRequest, variables);
       const { response, error, bodyParseError, actualRequest } = sendResult;
 
-      const assertionResults = response ? runAssertions(response, record.request.assertions || []) : [];
+      const assertionResults = response ? runAssertions(response, modifiedRequest.assertions || []) : [];
 
       let passed = true;
       if (error || bodyParseError) {
@@ -122,8 +235,8 @@ export const HistoryPanel: React.FC = () => {
       const resultId = generateId();
       const requestResult: RequestResult = {
         id: resultId,
-        requestId: record.requestId || '',
-        request: record.request,
+        requestId: rerunRecord.requestId || '',
+        request: modifiedRequest,
         actualRequest,
         response,
         error,
@@ -138,15 +251,18 @@ export const HistoryPanel: React.FC = () => {
 
       addHistory({
         projectId: selectedProjectId!,
-        requestId: record.requestId,
+        requestId: rerunRecord.requestId,
         resultId,
-        request: record.request,
+        request: modifiedRequest,
         actualRequest,
         response,
-        passed
+        passed,
+        sourceHistoryId: rerunRecord.id
       });
 
       setActiveTab('report');
+      setShowRerunModal(false);
+      setRerunRecord(null);
     } catch (e: any) {
       console.error('复跑失败:', e);
     } finally {
@@ -298,8 +414,8 @@ export const HistoryPanel: React.FC = () => {
       }
       case 'assertions': {
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ display: 'flex', gap: 16, fontSize: 12, marginBottom: 8 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'flex', gap: 16, fontSize: 12 }}>
               <span>
                 记录 1:{' '}
                 <span className={record1.passed ? 'text-success' : 'text-error'}>
@@ -313,18 +429,38 @@ export const HistoryPanel: React.FC = () => {
                 </span>
               </span>
             </div>
-            {renderDiffLines(
-              diffText(
-                record1.failureReason || '无失败原因',
-                record2.failureReason || '无失败原因'
-              )
-            )}
+            <div>
+              <strong className="text-sm">失败原因对比</strong>
+              <div className="mt-2">
+                {renderDiffLines(
+                  diffText(
+                    record1.failureReason || '无失败原因',
+                    record2.failureReason || '无失败原因'
+                  )
+                )}
+              </div>
+            </div>
+            <div>
+              <strong className="text-sm">断言定义对比</strong>
+              <div className="mt-2">
+                {renderDiffLines(
+                  diffJson(
+                    record1.request.assertions || [],
+                    record2.request.assertions || []
+                  )
+                )}
+              </div>
+            </div>
           </div>
         );
       }
       default:
         return null;
     }
+  };
+
+  const findHistoryIndex = (id: string) => {
+    return projectHistory.findIndex((h) => h.id === id) + 1;
   };
 
   if (!selectedProjectId) {
@@ -378,12 +514,16 @@ export const HistoryPanel: React.FC = () => {
             <select
               className="select"
               style={{ maxWidth: 140 }}
-              value={filterPassed}
-              onChange={(e) => setFilterPassed(e.target.value as any)}
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value as HistoryFilterType)}
             >
               <option value="all">全部结果</option>
               <option value="passed">仅通过</option>
               <option value="failed">仅失败</option>
+              <option value="2xx">2xx</option>
+              <option value="3xx">3xx</option>
+              <option value="4xx">4xx</option>
+              <option value="5xx">5xx</option>
             </select>
           </div>
         </div>
@@ -404,7 +544,7 @@ export const HistoryPanel: React.FC = () => {
                     style={{ padding: '8px 10px', cursor: 'pointer', marginBottom: 6 }}
                     onClick={() => handleSelectRecord(record)}
                   >
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-1 min-w-0 flex-wrap">
                       <span className={`tag ${record.passed ? 'tag-success' : 'tag-error'}`}>
                         {record.passed ? '✓' : '✗'}
                       </span>
@@ -412,6 +552,11 @@ export const HistoryPanel: React.FC = () => {
                         {record.request.method}
                       </span>
                       <span className="truncate">{record.request.name}</span>
+                      {record.sourceHistoryId && (
+                        <span className="tag tag-info">
+                          从历史 #{findHistoryIndex(record.sourceHistoryId)} 复跑
+                        </span>
+                      )}
                       {record.failureReason && (
                         <span className="tag tag-warning">⚑ {record.failureReason}</span>
                       )}
@@ -423,7 +568,7 @@ export const HistoryPanel: React.FC = () => {
                         className="btn btn-sm btn-primary"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleRerun(record);
+                          handleOpenRerunModal(record);
                         }}
                         disabled={isReplaying}
                       >
@@ -475,6 +620,13 @@ export const HistoryPanel: React.FC = () => {
                 >
                   对比
                 </button>
+                <button
+                  className={`tab-btn ${detailTab === 'trend' ? 'active' : ''}`}
+                  onClick={() => setDetailTab('trend')}
+                  disabled={!selectedRecord?.requestId}
+                >
+                  趋势
+                </button>
               </div>
             </div>
 
@@ -491,6 +643,11 @@ export const HistoryPanel: React.FC = () => {
                   <span className={`tag ${selectedRecord.passed ? 'tag-success' : 'tag-error'}`}>
                     {selectedRecord.passed ? '✓ 通过' : '✗ 失败'}
                   </span>
+                  {selectedRecord.sourceHistoryId && (
+                    <span className="tag tag-info">
+                      从历史 #{findHistoryIndex(selectedRecord.sourceHistoryId)} 复跑
+                    </span>
+                  )}
                   {selectedRecord.response && (
                     <>
                       <span className="tag">
@@ -714,6 +871,105 @@ export const HistoryPanel: React.FC = () => {
                   </>
                 )}
               </div>
+            ) : detailTab === 'trend' ? (
+              <div style={{ flex: 1, overflow: 'auto', minHeight: 200, display: 'flex', flexDirection: 'column', gap: 16, padding: 4 }}>
+                {!trendStats ? (
+                  <div className="text-center text-muted" style={{ padding: 32 }}>
+                    暂无趋势数据
+                  </div>
+                ) : (
+                  <>
+                    <div className="card" style={{ padding: 12 }}>
+                      <strong className="text-sm" style={{ display: 'block', marginBottom: 10 }}>通过率趋势</strong>
+                      <div style={{ display: 'flex', gap: 16, marginBottom: 10, fontSize: 12 }}>
+                        <span>总执行: <strong>{trendStats.total}</strong></span>
+                        <span className="text-success">通过: <strong>{trendStats.passedCount}</strong></span>
+                        <span className="text-error">失败: <strong>{trendStats.failedCount}</strong></span>
+                        <span>通过率: <strong>{trendStats.passRate}%</strong></span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                        {sameRequestHistoryAsc.map((h, idx) => (
+                          <div
+                            key={h.id}
+                            title={`#${idx + 1} ${formatDate(h.createdAt)} - ${h.passed ? '通过' : '失败'}${h.response ? ` - ${h.response.status}` : ''}`}
+                            style={{
+                              width: 12,
+                              height: 12,
+                              borderRadius: '50%',
+                              background: h.passed ? '#2ea043' : '#f85149',
+                              border: '1px solid var(--border-color)',
+                              cursor: 'pointer'
+                            }}
+                            onClick={() => handleSelectRecord(h)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="card" style={{ padding: 12 }}>
+                      <strong className="text-sm" style={{ display: 'block', marginBottom: 10 }}>状态码分布</strong>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {(['2xx', '3xx', '4xx', '5xx', 'no-response'] as const).map((key) => {
+                          const count = trendStats.statusCounts[key];
+                          const percent = trendStats.statusTotal > 0 ? (count / trendStats.statusTotal) * 100 : 0;
+                          const color = key === '2xx' ? '#2ea043' : key === '3xx' ? '#d29922' : key === '4xx' ? '#db6d28' : key === '5xx' ? '#f85149' : '#6e7681';
+                          const label = key === 'no-response' ? '无响应' : key;
+                          return (
+                            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <span style={{ width: 60, fontSize: 12 }}>{label}</span>
+                              <div style={{ flex: 1, height: 16, background: 'var(--bg-secondary)', borderRadius: 3, overflow: 'hidden' }}>
+                                <div style={{ width: `${percent}%`, height: '100%', background: color, transition: 'width 0.3s' }} />
+                              </div>
+                              <span style={{ width: 40, fontSize: 12, textAlign: 'right' }}>{count}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="card" style={{ padding: 12 }}>
+                      <strong className="text-sm" style={{ display: 'block', marginBottom: 10 }}>耗时变化</strong>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {sameRequestHistoryAsc.map((h, idx) => {
+                          const time = h.response?.time || 0;
+                          const percent = trendStats.timePercent(time);
+                          return (
+                            <div key={h.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <span style={{ width: 30, fontSize: 11, color: 'var(--text-secondary)' }}>#{idx + 1}</span>
+                              <div style={{ flex: 1, height: 12, background: 'var(--bg-secondary)', borderRadius: 2, overflow: 'hidden' }}>
+                                <div style={{ width: `${percent}%`, height: '100%', background: '#1f6feb', transition: 'width 0.3s' }} />
+                              </div>
+                              <span style={{ width: 60, fontSize: 12, textAlign: 'right' }}>{time}ms</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="card" style={{ padding: 12 }}>
+                      <strong className="text-sm" style={{ display: 'block', marginBottom: 10 }}>失败原因统计</strong>
+                      {trendStats.failureReasons.length === 0 ? (
+                        <div className="text-sm text-muted">暂无失败记录</div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {trendStats.failureReasons.map(([reason, count]) => {
+                            const percent = trendStats.statusTotal > 0 ? (count / trendStats.statusTotal) * 100 : 0;
+                            return (
+                              <div key={reason} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <div style={{ flex: 1, height: 16, background: 'var(--bg-secondary)', borderRadius: 3, overflow: 'hidden', position: 'relative' }}>
+                                  <div style={{ width: `${percent}%`, height: '100%', background: '#f85149', transition: 'width 0.3s' }} />
+                                  <span style={{ position: 'absolute', left: 8, top: 0, fontSize: 11, lineHeight: '16px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '80%' }}>{reason}</span>
+                                </div>
+                                <span style={{ width: 40, fontSize: 12, textAlign: 'right' }}>{count}次</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
             ) : (
               <div style={{ flex: 1, overflow: 'auto', minHeight: 200, display: 'flex', flexDirection: 'column' }}>
                 <div style={{ marginBottom: 10 }}>
@@ -893,6 +1149,103 @@ export const HistoryPanel: React.FC = () => {
             }}
           >
             {getCompareContent()}
+          </div>
+        </Modal>
+      )}
+
+      {showRerunModal && rerunRecord && (
+        <Modal
+          title="复跑确认"
+          onClose={() => setShowRerunModal(false)}
+          width={640}
+          footer={
+            <>
+              <button className="btn" onClick={() => setShowRerunModal(false)}>
+                取消
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleConfirmRerun}
+                disabled={isReplaying}
+              >
+                {isReplaying ? '运行中...' : '执行复跑'}
+              </button>
+            </>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div className="form-row">
+              <label>选择环境</label>
+              <select
+                className="select"
+                value={rerunEnvId}
+                onChange={(e) => setRerunEnvId(e.target.value)}
+              >
+                {environments.map((env) => (
+                  <option key={env.id} value={env.id}>
+                    {env.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', marginBottom: 8 }}>请求头</label>
+              <KeyValueEditor
+                items={rerunHeaders}
+                onChange={setRerunHeaders}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', marginBottom: 8 }}>Body 类型</label>
+              <select
+                className="select"
+                value={rerunBodyType}
+                onChange={(e) => setRerunBodyType(e.target.value as RerunBodyType)}
+                style={{ marginBottom: 12 }}
+              >
+                <option value="none">none</option>
+                <option value="json">json</option>
+                <option value="raw">raw</option>
+                <option value="form-data">form-data</option>
+                <option value="x-www-form-urlencoded">urlencoded</option>
+              </select>
+
+              {rerunBodyType === 'json' && (
+                <textarea
+                  className="input"
+                  style={{ minHeight: 120, fontFamily: 'monospace', fontSize: 12 }}
+                  placeholder='{"key": "value"}'
+                  value={rerunBodyJson}
+                  onChange={(e) => setRerunBodyJson(e.target.value)}
+                />
+              )}
+
+              {rerunBodyType === 'raw' && (
+                <textarea
+                  className="input"
+                  style={{ minHeight: 120, fontFamily: 'monospace', fontSize: 12 }}
+                  placeholder="raw body content"
+                  value={rerunBodyRaw}
+                  onChange={(e) => setRerunBodyRaw(e.target.value)}
+                />
+              )}
+
+              {rerunBodyType === 'form-data' && (
+                <KeyValueEditor
+                  items={rerunBodyFormData}
+                  onChange={setRerunBodyFormData}
+                />
+              )}
+
+              {rerunBodyType === 'x-www-form-urlencoded' && (
+                <KeyValueEditor
+                  items={rerunBodyUrlEncoded}
+                  onChange={setRerunBodyUrlEncoded}
+                />
+              )}
+            </div>
           </div>
         </Modal>
       )}

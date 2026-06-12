@@ -10,7 +10,8 @@ import {
   RequestResult,
   TabType,
   KeyValuePair,
-  HttpMethod
+  HttpMethod,
+  OfflineReport
 } from '@/types';
 import { AppData, loadData, saveData } from './storage';
 import { generateId } from '@/utils';
@@ -21,6 +22,7 @@ interface AppState extends AppData {
   currentResults: RequestResult[];
   compareSnapshotId: string | null;
   compareResults: RequestResult[];
+  importedReport: OfflineReport | null;
 
   setActiveTab: (tab: TabType) => void;
 
@@ -62,6 +64,9 @@ interface AppState extends AppData {
   clearHistory: (projectId?: string) => void;
   clearExpiredHistory: (days: number) => void;
 
+  importOfflineReport: (report: OfflineReport) => void;
+  clearImportedReport: () => void;
+
   persist: () => void;
 }
 
@@ -80,6 +85,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentResults: [],
   compareSnapshotId: null,
   compareResults: [],
+  importedReport: null,
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 
@@ -412,6 +418,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
     set({ history: get().history.filter((h) => h.createdAt >= cutoff) });
     get().persist();
+  },
+
+  importOfflineReport: (report) => {
+    set({ importedReport: report, currentResults: report.results });
+  },
+
+  clearImportedReport: () => {
+    set({ importedReport: null, currentResults: [] });
   },
 
   persist: () => {
